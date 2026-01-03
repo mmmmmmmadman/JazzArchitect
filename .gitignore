@@ -1,0 +1,24 @@
+# Build
+build/
+*.xcworkspace
+xcuserdata/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# JUCE (use submodule instead)
+cpp/JUCE/
+
+# Data submodules
+data/

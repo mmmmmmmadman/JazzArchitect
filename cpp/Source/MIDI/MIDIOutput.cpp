@@ -1,0 +1,1 @@
+// Placeholder - MIDIOutput implementation
