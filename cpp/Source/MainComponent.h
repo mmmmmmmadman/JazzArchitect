@@ -28,6 +28,7 @@ public:
     void audioDeviceStopped() override;
 
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
     void timerCallback() override;
     void mouseDown(const juce::MouseEvent& event) override;
@@ -121,6 +122,10 @@ private:
 
     // Preview sound auto-stop
     int previewStopCounter_ = 0;  // Countdown to stop preview sound
+
+    // Button press glow effect
+    int glowButtonIndex_ = -1;  // Which button is pressed (-1 = none)
+    int glowCounter_ = 0;       // Countdown for glow fade
 
     // Hover help for sliders (0=none, 1=tritone, 2=iiV, 3=modal, 4=extension)
     int hoveredSlider_ = 0;

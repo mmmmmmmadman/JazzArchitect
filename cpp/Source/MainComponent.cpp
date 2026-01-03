@@ -77,7 +77,7 @@ MainComponent::MainComponent()
     updateAudioOutputDevices();
 
     // BPM slider
-    bpmSlider_.setRange(60, 200, 1);
+    bpmSlider_.setRange(40, 200, 1);
     bpmSlider_.setValue(120);
     bpmSlider_.setTextBoxStyle(juce::Slider::TextBoxRight, false, 45, 18);
     styleSlider(bpmSlider_);
@@ -96,11 +96,11 @@ MainComponent::MainComponent()
     lengthLabel_.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(lengthLabel_);
 
-    // Buttons
-    generateButton_.onClick = [this] { generateProgression(); };
-    playButton_.onClick = [this] { startPlayback(); };
-    stopButton_.onClick = [this] { stopPlayback(); };
-    exportButton_.onClick = [this] { exportMIDI(); };
+    // Buttons with glow effect
+    generateButton_.onClick = [this] { glowButtonIndex_ = 0; glowCounter_ = 6; generateProgression(); };
+    playButton_.onClick = [this] { glowButtonIndex_ = 1; glowCounter_ = 6; startPlayback(); };
+    stopButton_.onClick = [this] { glowButtonIndex_ = 2; glowCounter_ = 6; stopPlayback(); };
+    exportButton_.onClick = [this] { glowButtonIndex_ = 3; glowCounter_ = 6; exportMIDI(); };
     styleButton(generateButton_, accent_);
     styleButton(playButton_, accent_);
     styleButton(stopButton_, textLight_);
@@ -149,18 +149,27 @@ MainComponent::MainComponent()
     statusLabel_.setText("Ready", juce::dontSendNotification);
     addAndMakeVisible(statusLabel_);
 
-    // Display toggles
-    auto setupToggle = [this](juce::ToggleButton& toggle) {
-        toggle.setToggleState(true, juce::dontSendNotification);
-        toggle.setColour(juce::ToggleButton::textColourId, textDim_);
-        toggle.setColour(juce::ToggleButton::tickColourId, accent_);
-        toggle.setColour(juce::ToggleButton::tickDisabledColourId, textDim_);
-        toggle.onClick = [this] { repaint(); };
-        addAndMakeVisible(toggle);
-    };
-    setupToggle(showChordsToggle_);
-    setupToggle(showTrebleToggle_);
-    setupToggle(showBassToggle_);
+    // Display toggles with glow effect
+    showChordsToggle_.setToggleState(true, juce::dontSendNotification);
+    showChordsToggle_.setColour(juce::ToggleButton::textColourId, textDim_);
+    showChordsToggle_.setColour(juce::ToggleButton::tickColourId, accent_);
+    showChordsToggle_.setColour(juce::ToggleButton::tickDisabledColourId, textDim_);
+    showChordsToggle_.onClick = [this] { glowButtonIndex_ = 4; glowCounter_ = 6; repaint(); };
+    addAndMakeVisible(showChordsToggle_);
+
+    showTrebleToggle_.setToggleState(true, juce::dontSendNotification);
+    showTrebleToggle_.setColour(juce::ToggleButton::textColourId, textDim_);
+    showTrebleToggle_.setColour(juce::ToggleButton::tickColourId, accent_);
+    showTrebleToggle_.setColour(juce::ToggleButton::tickDisabledColourId, textDim_);
+    showTrebleToggle_.onClick = [this] { glowButtonIndex_ = 5; glowCounter_ = 6; repaint(); };
+    addAndMakeVisible(showTrebleToggle_);
+
+    showBassToggle_.setToggleState(true, juce::dontSendNotification);
+    showBassToggle_.setColour(juce::ToggleButton::textColourId, textDim_);
+    showBassToggle_.setColour(juce::ToggleButton::tickColourId, accent_);
+    showBassToggle_.setColour(juce::ToggleButton::tickDisabledColourId, textDim_);
+    showBassToggle_.onClick = [this] { glowButtonIndex_ = 6; glowCounter_ = 6; repaint(); };
+    addAndMakeVisible(showBassToggle_);
 
     // Chord editor (hidden by default)
     chordEditor_.setColour(juce::TextEditor::backgroundColourId, bgDark_);
@@ -440,6 +449,14 @@ void MainComponent::timerCallback()
         }
     }
 
+    // Button glow fade
+    if (glowCounter_ > 0) {
+        glowCounter_--;
+        if (glowCounter_ == 0) {
+            glowButtonIndex_ = -1;
+        }
+    }
+
     // Repaint for hover help updates
     repaint();
 }
@@ -520,7 +537,7 @@ void MainComponent::paint(juce::Graphics& g)
         int boxHeight = 55;
         int staffLineSpacing = 10;
         int singleStaffHeight = 4 * staffLineSpacing;
-        int sectionGap = 15;  // Gap between sections (+10px from before)
+        int sectionGap = 25;  // Gap between sections (+10px)
 
         // Calculate row height based on visible sections
         int rowHeight = sectionGap;  // Start with gap
@@ -628,6 +645,22 @@ void MainComponent::paint(juce::Graphics& g)
 
                 // Draw chord box
                 if (showChords) {
+                    // Check if this chord box is being clicked
+                    auto mousePos = getMouseXYRelative();
+                    bool isClicking = juce::ModifierKeys::currentModifiers.isLeftButtonDown() &&
+                                      mousePos.x >= x && mousePos.x <= x + boxWidth &&
+                                      mousePos.y >= chordBoxY && mousePos.y <= chordBoxY + boxHeight;
+
+                    // Draw click glow effect
+                    if (isClicking) {
+                        g.setColour(accent_.withAlpha(0.4f));
+                        g.drawRoundedRectangle(static_cast<float>(x - 4), static_cast<float>(chordBoxY - 4),
+                                               static_cast<float>(boxWidth + 8), static_cast<float>(boxHeight + 8), 8.0f, 3.0f);
+                        g.setColour(accent_.withAlpha(0.2f));
+                        g.drawRoundedRectangle(static_cast<float>(x - 6), static_cast<float>(chordBoxY - 6),
+                                               static_cast<float>(boxWidth + 12), static_cast<float>(boxHeight + 12), 10.0f, 2.0f);
+                    }
+
                     if (static_cast<int>(idx) == currentChordIndex_ && isPlaying_) {
                         g.setColour(accent_.withAlpha(0.3f));
                     } else {
@@ -664,6 +697,9 @@ void MainComponent::paint(juce::Graphics& g)
                         midiNotes = currentProgression_[idx].getMIDINotes(4);
                     }
 
+                    // Find the lowest note (bass note)
+                    int lowestNote = midiNotes.empty() ? 0 : *std::min_element(midiNotes.begin(), midiNotes.end());
+
                     juce::Colour noteColor = (static_cast<int>(idx) == currentChordIndex_ && isPlaying_) ? accent_ : accentDim_;
 
                     int noteCenterX = x + boxWidth / 2;
@@ -674,10 +710,12 @@ void MainComponent::paint(juce::Graphics& g)
 
                         // Only draw if the corresponding staff is visible
                         if ((isTrebleNote && showTreble) || (!isTrebleNote && showBass)) {
-                            // Highlight dragging note
+                            // Highlight dragging note or lowest note (bass)
                             if (draggingChordIndex_ == static_cast<int>(idx) &&
                                 draggingNoteIndex_ == static_cast<int>(noteIdx)) {
                                 g.setColour(accent_);
+                            } else if (midi == lowestNote) {
+                                g.setColour(textLight_);  // Bright white for bass note
                             } else {
                                 g.setColour(noteColor);
                             }
@@ -710,13 +748,14 @@ void MainComponent::paint(juce::Graphics& g)
     int circleCenterY = 430;  // Below sliders (205 + 22 + 130 + padding)
     drawCircleOfFifths(g, circleCenterX, circleCenterY, circleRadius);
 
-    // Hover help text for sliders (below Circle of Fifths)
+    // Hover help text for all controls (below Circle of Fifths)
     int helpY = circleCenterY + circleRadius + 15;
     int helpWidth = 4 * sliderWidth + 3 * sliderSpacing;
     int helpX = slidersStartX;
 
     juce::String helpTextEN, helpTextJA, helpTextZH;
 
+    // Style parameter sliders
     if (tritoneSubSlider_.isMouseOver()) {
         helpTextEN = "Tritone Sub: Replace V7 with bII7. Both share the same tritone interval, enabling smooth chromatic voice leading to tonic.";
         helpTextJA = juce::String::fromUTF8(u8"トライトーン代理: V7をbII7に置換。同じ増4度を共有し、滑らかな半音進行を生む。");
@@ -733,6 +772,76 @@ void MainComponent::paint(juce::Graphics& g)
         helpTextEN = "Extension: Control chord complexity. Low: triads/7ths. Medium: add 9ths. High: 11ths & 13ths for rich colors.";
         helpTextJA = juce::String::fromUTF8(u8"テンション: 和音の複雑さを制御。低:3和音/7th。中:9th追加。高:11th,13thで豊かな響き。");
         helpTextZH = juce::String::fromUTF8(u8"延伸音: 控制和弦複雜度。低:三和弦/七和弦。中:加入9度。高:11、13度創造豐富色彩。");
+    }
+    // Buttons
+    else if (generateButton_.isMouseOver()) {
+        helpTextEN = "Generate: Create a new chord progression based on the selected style and parameters.";
+        helpTextJA = juce::String::fromUTF8(u8"生成: 選択したスタイルとパラメータに基づいて新しいコード進行を作成。");
+        helpTextZH = juce::String::fromUTF8(u8"生成: 根據選定的風格和參數創建新的和弦進行。");
+    } else if (playButton_.isMouseOver()) {
+        helpTextEN = "Play: Start playback of the current chord progression with the built-in synthesizer.";
+        helpTextJA = juce::String::fromUTF8(u8"再生: 内蔵シンセサイザーで現在のコード進行を再生開始。");
+        helpTextZH = juce::String::fromUTF8(u8"播放: 使用內建合成器開始播放當前和弦進行。");
+    } else if (stopButton_.isMouseOver()) {
+        helpTextEN = "Stop: Stop the current playback immediately.";
+        helpTextJA = juce::String::fromUTF8(u8"停止: 現在の再生をすぐに停止。");
+        helpTextZH = juce::String::fromUTF8(u8"停止: 立即停止當前播放。");
+    } else if (exportButton_.isMouseOver()) {
+        helpTextEN = "Export MIDI: Save the current chord progression as a Standard MIDI File (.mid).";
+        helpTextJA = juce::String::fromUTF8(u8"MIDI出力: 現在のコード進行をMIDIファイル(.mid)として保存。");
+        helpTextZH = juce::String::fromUTF8(u8"匯出 MIDI: 將當前和弦進行儲存為標準 MIDI 檔案 (.mid)。");
+    }
+    // Selectors
+    else if (styleSelector_.isMouseOver()) {
+        helpTextEN = "Style: Choose a jazz style preset. Each style has different harmonic preferences and substitution tendencies.";
+        helpTextJA = juce::String::fromUTF8(u8"スタイル: ジャズスタイルを選択。各スタイルは異なる和声傾向を持つ。");
+        helpTextZH = juce::String::fromUTF8(u8"風格: 選擇爵士風格預設。每種風格有不同的和聲偏好與替代傾向。");
+    } else if (keySelector_.isMouseOver()) {
+        helpTextEN = "Key: Set the tonic key for the chord progression. All chords will be generated relative to this key.";
+        helpTextJA = juce::String::fromUTF8(u8"キー: コード進行の調を設定。全てのコードはこの調に基づいて生成。");
+        helpTextZH = juce::String::fromUTF8(u8"調性: 設定和弦進行的主調。所有和弦將根據此調生成。");
+    } else if (synthSelector_.isMouseOver()) {
+        helpTextEN = "Sound: Select the synthesizer timbre. E.Piano (Rhodes-like), Organ, or Pad for different textures.";
+        helpTextJA = juce::String::fromUTF8(u8"音色: シンセサイザーの音色を選択。E.Piano、Organ、Padから選べる。");
+        helpTextZH = juce::String::fromUTF8(u8"音色: 選擇合成器音色。E.Piano (類 Rhodes)、Organ 或 Pad。");
+    } else if (audioOutputSelector_.isMouseOver()) {
+        helpTextEN = "Audio Out: Select the audio output device for playback.";
+        helpTextJA = juce::String::fromUTF8(u8"オーディオ出力: 再生用のオーディオ出力デバイスを選択。");
+        helpTextZH = juce::String::fromUTF8(u8"音訊輸出: 選擇播放用的音訊輸出裝置。");
+    }
+    // Other sliders
+    else if (bpmSlider_.isMouseOver()) {
+        helpTextEN = "BPM: Set the tempo (beats per minute) for playback. Range: 40-200 BPM.";
+        helpTextJA = juce::String::fromUTF8(u8"BPM: 再生テンポを設定。範囲: 40-200 BPM。");
+        helpTextZH = juce::String::fromUTF8(u8"BPM: 設定播放速度 (每分鐘拍數)。範圍: 40-200 BPM。");
+    } else if (lengthSlider_.isMouseOver()) {
+        helpTextEN = "Length: Set the number of chords to generate. Range: 4-32 chords.";
+        helpTextJA = juce::String::fromUTF8(u8"長さ: 生成するコード数を設定。範囲: 4-32コード。");
+        helpTextZH = juce::String::fromUTF8(u8"長度: 設定生成的和弦數量。範圍: 4-32 個和弦。");
+    }
+    // Display toggles
+    else if (showChordsToggle_.isMouseOver()) {
+        helpTextEN = "Chords: Toggle display of chord symbol boxes (chord name and Roman numeral).";
+        helpTextJA = juce::String::fromUTF8(u8"コード: コードシンボル表示の切り替え（コード名とローマ数字）。");
+        helpTextZH = juce::String::fromUTF8(u8"和弦: 切換和弦符號方塊顯示 (和弦名稱與羅馬數字)。");
+    } else if (showTrebleToggle_.isMouseOver()) {
+        helpTextEN = "Treble: Toggle display of treble clef staff showing upper voicing notes.";
+        helpTextJA = juce::String::fromUTF8(u8"高音部: 高音部譜表の表示切り替え（上声部の音符）。");
+        helpTextZH = juce::String::fromUTF8(u8"高音譜: 切換高音譜表顯示 (上聲部音符)。");
+    } else if (showBassToggle_.isMouseOver()) {
+        helpTextEN = "Bass: Toggle display of bass clef staff showing bass notes.";
+        helpTextJA = juce::String::fromUTF8(u8"低音部: 低音部譜表の表示切り替え（ベース音）。");
+        helpTextZH = juce::String::fromUTF8(u8"低音譜: 切換低音譜表顯示 (低音音符)。");
+    }
+    // Chord boxes - check if mouse is over any chord box
+    else {
+        auto mousePos = getMouseXYRelative();
+        int hoveredChord = findChordAtPosition(mousePos.x, mousePos.y);
+        if (hoveredChord >= 0) {
+            helpTextEN = "Chord Box: Click upper half to edit chord name. Click lower half to preview sound. Drag notes on staff to adjust voicing.";
+            helpTextJA = juce::String::fromUTF8(u8"コードボックス: 上半分クリックでコード名編集。下半分でプレビュー。譜面上の音符をドラッグでボイシング調整。");
+            helpTextZH = juce::String::fromUTF8(u8"和弦方塊: 點擊上半部編輯和弦名稱。點擊下半部預聽。拖曳譜表上的音符調整配置。");
+        }
     }
 
     if (helpTextEN.isNotEmpty()) {
@@ -751,6 +860,51 @@ void MainComponent::paint(juce::Graphics& g)
         g.drawFittedText(helpTextEN, textAreaX, helpY, textAreaWidth, lineHeight, juce::Justification::centred, 2);
         g.drawFittedText(helpTextJA, textAreaX, helpY + lineHeight + 2, textAreaWidth, lineHeight, juce::Justification::centred, 2);
         g.drawFittedText(helpTextZH, textAreaX, helpY + (lineHeight + 2) * 2, textAreaWidth, lineHeight, juce::Justification::centred, 2);
+    }
+}
+
+void MainComponent::paintOverChildren(juce::Graphics& g)
+{
+    // Draw button press glow effect (drawn over child components)
+    if (glowButtonIndex_ >= 0 && glowCounter_ > 0) {
+        float alpha = static_cast<float>(glowCounter_) / 6.0f;  // Fade from 1.0 to 0.0
+        juce::Rectangle<float> bounds;
+
+        switch (glowButtonIndex_) {
+            case 0: bounds = generateButton_.getBounds().toFloat(); break;
+            case 1: bounds = playButton_.getBounds().toFloat(); break;
+            case 2: bounds = stopButton_.getBounds().toFloat(); break;
+            case 3: bounds = exportButton_.getBounds().toFloat(); break;
+            case 4: bounds = showChordsToggle_.getBounds().toFloat(); break;
+            case 5: bounds = showTrebleToggle_.getBounds().toFloat(); break;
+            case 6: bounds = showBassToggle_.getBounds().toFloat(); break;
+            default: break;
+        }
+
+        if (!bounds.isEmpty()) {
+            // Inner glow
+            g.setColour(accent_.withAlpha(0.6f * alpha));
+            g.drawRoundedRectangle(bounds.expanded(4.0f), 6.0f, 3.0f);
+            // Outer glow
+            g.setColour(accent_.withAlpha(0.35f * alpha));
+            g.drawRoundedRectangle(bounds.expanded(8.0f), 10.0f, 2.0f);
+        }
+    }
+
+    // Draw chord box glow effect
+    for (size_t i = 0; i < chordBoxCache_.size(); ++i) {
+        if (static_cast<int>(i) == glowButtonIndex_ - 100 && glowCounter_ > 0) {
+            const auto& box = chordBoxCache_[i];
+            float alpha = static_cast<float>(glowCounter_) / 6.0f;
+            auto bounds = juce::Rectangle<float>(static_cast<float>(box.x), static_cast<float>(box.y),
+                                                  static_cast<float>(box.width), static_cast<float>(box.height));
+            // Inner glow
+            g.setColour(accent_.withAlpha(0.6f * alpha));
+            g.drawRoundedRectangle(bounds.expanded(4.0f), 6.0f, 3.0f);
+            // Outer glow
+            g.setColour(accent_.withAlpha(0.35f * alpha));
+            g.drawRoundedRectangle(bounds.expanded(8.0f), 10.0f, 2.0f);
+        }
     }
 }
 
@@ -842,6 +996,9 @@ void MainComponent::mouseDown(const juce::MouseEvent& event)
         if (noteIdx >= 0) {
             draggingChordIndex_ = static_cast<int>(i);
             draggingNoteIndex_ = noteIdx;
+            // Trigger glow effect for chord box
+            glowButtonIndex_ = 100 + static_cast<int>(i);
+            glowCounter_ = 6;
             // Use custom voicing if available, otherwise use original
             if (customVoicings_.count(i) > 0) {
                 draggedNotes_ = customVoicings_.at(i);
@@ -862,6 +1019,10 @@ void MainComponent::mouseDown(const juce::MouseEvent& event)
         if (chordIndex >= 0) {
             const auto& box = chordBoxCache_[static_cast<size_t>(chordIndex)];
             int boxMidY = box.y + box.height / 2;
+
+            // Trigger glow effect for chord box
+            glowButtonIndex_ = 100 + chordIndex;
+            glowCounter_ = 6;
 
             // Click on lower half: play chord sound
             if (y > boxMidY) {
