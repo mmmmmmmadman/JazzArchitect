@@ -34,6 +34,7 @@ public:
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
+    void mouseMove(const juce::MouseEvent& event) override;
 
 private:
     // Colors (Techno Machine style)
@@ -58,6 +59,7 @@ private:
     juce::TextButton playButton_{"Play"};
     juce::TextButton stopButton_{"Stop"};
     juce::TextButton exportButton_{"Export MIDI"};
+    juce::TextButton importMidiButton_{"Import MIDI"};
 
     juce::Label bpmLabel_{"", "BPM"};
     juce::Label lengthLabel_{"", "Length"};
@@ -117,6 +119,11 @@ private:
     int draggingNoteIndex_ = -1;
     std::vector<int> draggedNotes_;
 
+    // Chord duration resizing
+    int resizingChordIndex_ = -1;    // Which chord is being resized (-1 = none)
+    int resizeStartX_ = 0;           // Drag start X position
+    double resizeStartDuration_ = 0; // Original duration before resize
+
     // Custom voicings (chord index -> custom MIDI notes)
     std::map<size_t, std::vector<int>> customVoicings_;
 
@@ -150,6 +157,7 @@ private:
     void updateUI();
     void initializeAudio();
     void exportMIDI();
+    void importMIDI();
     void updateAudioOutputDevices();
     void changeAudioOutputDevice();
     int midiToStaffY(int midiNote, int trebleY, int bassY, int spacing);

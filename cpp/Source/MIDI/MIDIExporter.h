@@ -52,13 +52,16 @@ public:
 
         // Convert beats to ticks
         int ticksPerBeat = 480;
-        int ticksPerChord = static_cast<int>(beatsPerChord * ticksPerBeat);
 
         // Add chord notes
         int currentTick = 0;
         int channel = 1;  // MIDI channel 1
 
         for (const auto& chord : chords) {
+            // Use individual chord duration (or fallback to beatsPerChord parameter)
+            double chordDuration = chord.getDuration();
+            int ticksPerChord = static_cast<int>(chordDuration * ticksPerBeat);
+
             auto notes = chord.getMIDINotes(baseOctave);
 
             // Note on events
@@ -108,11 +111,14 @@ public:
         juce::MidiMessageSequence sequence;
 
         int ticksPerBeat = 480;
-        int ticksPerChord = static_cast<int>(beatsPerChord * ticksPerBeat);
         int currentTick = 0;
         int channel = 1;
 
         for (const auto& chord : chords) {
+            // Use individual chord duration
+            double chordDuration = chord.getDuration();
+            int ticksPerChord = static_cast<int>(chordDuration * ticksPerBeat);
+
             auto notes = chord.getMIDINotes(baseOctave);
 
             for (int note : notes) {

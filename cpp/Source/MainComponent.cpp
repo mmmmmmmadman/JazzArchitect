@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "MIDI/MIDIExporter.h"
+#include "MIDI/MIDIImporter.h"
 
 MainComponent::MainComponent()
 {
@@ -105,10 +106,13 @@ MainComponent::MainComponent()
     styleButton(playButton_, accent_);
     styleButton(stopButton_, textLight_);
     styleButton(exportButton_, textDim_);
+    importMidiButton_.onClick = [this] { glowButtonIndex_ = 7; glowCounter_ = 6; importMIDI(); };
+    styleButton(importMidiButton_, textDim_);
     addAndMakeVisible(generateButton_);
     addAndMakeVisible(playButton_);
     addAndMakeVisible(stopButton_);
     addAndMakeVisible(exportButton_);
+    addAndMakeVisible(importMidiButton_);
 
     // Style parameter sliders (vertical)
     auto setupVerticalSlider = [this](juce::Slider& slider, juce::Label& label, float defaultVal) {
@@ -348,6 +352,50 @@ void MainComponent::exportMIDI()
     fileChooser_ = std::move(chooser);
 }
 
+void MainComponent::importMIDI()
+{
+    // Create file chooser
+    auto chooser = std::make_unique<juce::FileChooser>(
+        "Import MIDI File",
+        juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
+        "*.mid;*.midi");
+
+    auto chooserFlags = juce::FileBrowserComponent::openMode |
+                        juce::FileBrowserComponent::canSelectFiles;
+
+    chooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc) {
+        auto file = fc.getResult();
+        if (file == juce::File{}) {
+            return;  // User cancelled
+        }
+
+        auto result = JazzArchitect::MIDIImporter::importFromFile(file);
+
+        if (result.success) {
+            currentProgression_ = result.chords;
+            customVoicings_.clear();
+            currentChordIndex_ = 0;
+            playbackPosition_ = 0.0;
+
+            // Update BPM slider if tempo was found
+            if (result.bpm > 30.0 && result.bpm < 250.0) {
+                bpmSlider_.setValue(result.bpm, juce::dontSendNotification);
+            }
+
+            statusLabel_.setText("Imported " + juce::String(static_cast<int>(result.chords.size())) +
+                                " chords from " + file.getFileName(),
+                                juce::dontSendNotification);
+            repaint();
+        } else {
+            statusLabel_.setText("Import failed: " + juce::String(result.errorMessage),
+                                juce::dontSendNotification);
+        }
+    });
+
+    // Keep chooser alive
+    fileChooser_ = std::move(chooser);
+}
+
 int MainComponent::midiToStaffY(int midiNote, int trebleY, int bassY, int spacing)
 {
     // Note positions within octave: C=0, D=1, E=2, F=3, G=4, A=5, B=6
@@ -419,10 +467,27 @@ void MainComponent::updateUI()
 
         playbackPosition_ += beatsPerSecond * secondsPerUpdate;
 
-        int newChordIndex = static_cast<int>(playbackPosition_ / beatsPerChord_);
-        if (newChordIndex >= static_cast<int>(currentProgression_.size())) {
-            newChordIndex = 0;
+        // Calculate total duration and find current chord using individual durations
+        double totalBeats = 0.0;
+        for (const auto& chord : currentProgression_) {
+            totalBeats += chord.getDuration();
+        }
+
+        // Loop playback
+        if (playbackPosition_ >= totalBeats) {
             playbackPosition_ = 0.0;
+        }
+
+        // Find current chord index based on accumulated durations
+        double accumulatedBeats = 0.0;
+        int newChordIndex = 0;
+        for (size_t i = 0; i < currentProgression_.size(); ++i) {
+            double chordDuration = currentProgression_[i].getDuration();
+            if (playbackPosition_ < accumulatedBeats + chordDuration) {
+                newChordIndex = static_cast<int>(i);
+                break;
+            }
+            accumulatedBeats += chordDuration;
         }
 
         if (newChordIndex != currentChordIndex_) {
@@ -631,16 +696,32 @@ void MainComponent::paint(juce::Graphics& g)
             // Calculate how many chords in this row
             int chordsInThisRow = std::min(chordsPerRow, static_cast<int>(currentProgression_.size()) - row * chordsPerRow);
 
+            // Calculate total duration in this row for proportional widths
+            double totalRowDuration = 0.0;
+            for (int col = 0; col < chordsInThisRow; ++col) {
+                size_t idx = static_cast<size_t>(row * chordsPerRow + col);
+                if (idx < currentProgression_.size()) {
+                    totalRowDuration += currentProgression_[idx].getDuration();
+                }
+            }
+
             // Draw chords and notes for this row
+            int currentX = startX;
             for (int col = 0; col < chordsInThisRow; ++col) {
                 size_t idx = static_cast<size_t>(row * chordsPerRow + col);
                 if (idx >= currentProgression_.size()) break;
 
-                int x = startX + col * (boxWidth + spacing);
+                // Calculate width proportionally based on duration
+                double chordDuration = currentProgression_[idx].getDuration();
+                int totalSpaceForChords = availableWidth - (chordsInThisRow - 1) * spacing;
+                int thisBoxWidth = static_cast<int>((chordDuration / totalRowDuration) * totalSpaceForChords);
+                thisBoxWidth = std::max(60, std::min(200, thisBoxWidth));  // Clamp width
+
+                int x = currentX;
 
                 // Update chord box cache
                 if (idx < chordBoxCache_.size()) {
-                    chordBoxCache_[idx] = { x, chordBoxY, boxWidth, boxHeight, trebleY, bassY, staffLineSpacing };
+                    chordBoxCache_[idx] = { x, chordBoxY, thisBoxWidth, boxHeight, trebleY, bassY, staffLineSpacing };
                 }
 
                 // Draw chord box
@@ -648,17 +729,17 @@ void MainComponent::paint(juce::Graphics& g)
                     // Check if this chord box is being clicked
                     auto mousePos = getMouseXYRelative();
                     bool isClicking = juce::ModifierKeys::currentModifiers.isLeftButtonDown() &&
-                                      mousePos.x >= x && mousePos.x <= x + boxWidth &&
+                                      mousePos.x >= x && mousePos.x <= x + thisBoxWidth &&
                                       mousePos.y >= chordBoxY && mousePos.y <= chordBoxY + boxHeight;
 
                     // Draw click glow effect
                     if (isClicking) {
                         g.setColour(accent_.withAlpha(0.4f));
                         g.drawRoundedRectangle(static_cast<float>(x - 4), static_cast<float>(chordBoxY - 4),
-                                               static_cast<float>(boxWidth + 8), static_cast<float>(boxHeight + 8), 8.0f, 3.0f);
+                                               static_cast<float>(thisBoxWidth + 8), static_cast<float>(boxHeight + 8), 8.0f, 3.0f);
                         g.setColour(accent_.withAlpha(0.2f));
                         g.drawRoundedRectangle(static_cast<float>(x - 6), static_cast<float>(chordBoxY - 6),
-                                               static_cast<float>(boxWidth + 12), static_cast<float>(boxHeight + 12), 10.0f, 2.0f);
+                                               static_cast<float>(thisBoxWidth + 12), static_cast<float>(boxHeight + 12), 10.0f, 2.0f);
                     }
 
                     if (static_cast<int>(idx) == currentChordIndex_ && isPlaying_) {
@@ -667,22 +748,29 @@ void MainComponent::paint(juce::Graphics& g)
                         g.setColour(bgMid_);
                     }
                     g.fillRoundedRectangle(static_cast<float>(x), static_cast<float>(chordBoxY),
-                                           static_cast<float>(boxWidth), static_cast<float>(boxHeight), 4.0f);
+                                           static_cast<float>(thisBoxWidth), static_cast<float>(boxHeight), 4.0f);
 
                     if (static_cast<int>(idx) == currentChordIndex_ && isPlaying_) {
                         g.setColour(accent_);
                         g.drawRoundedRectangle(static_cast<float>(x), static_cast<float>(chordBoxY),
-                                               static_cast<float>(boxWidth), static_cast<float>(boxHeight), 4.0f, 2.0f);
+                                               static_cast<float>(thisBoxWidth), static_cast<float>(boxHeight), 4.0f, 2.0f);
                     }
 
                     g.setColour(textLight_);
                     g.setFont(juce::FontOptions(16.0f).withStyle("Bold"));
-                    g.drawText(currentProgression_[idx].toString(), x, chordBoxY + 8, boxWidth, 20, juce::Justification::centred);
+                    g.drawText(currentProgression_[idx].toString(), x, chordBoxY + 8, thisBoxWidth, 20, juce::Justification::centred);
 
                     g.setFont(juce::FontOptions(11.0f));
                     g.setColour(accentDim_);
                     JazzArchitect::PitchClass key(keySelector_.getSelectedId() - 1);
-                    g.drawText(currentProgression_[idx].asRomanNumeral(key), x, chordBoxY + 32, boxWidth, 16, juce::Justification::centred);
+                    g.drawText(currentProgression_[idx].asRomanNumeral(key), x, chordBoxY + 32, thisBoxWidth, 16, juce::Justification::centred);
+
+                    // Draw duration indicator (bottom right corner)
+                    g.setFont(juce::FontOptions(10.0f));
+                    g.setColour(textDim_.withAlpha(0.7f));
+                    juce::String durationStr = juce::String(chordDuration, 1);
+                    if (durationStr.endsWith(".0")) durationStr = juce::String(static_cast<int>(chordDuration));
+                    g.drawText(durationStr, x + thisBoxWidth - 22, chordBoxY + boxHeight - 14, 18, 12, juce::Justification::right);
                 }
 
                 // Draw notes on staff
@@ -702,7 +790,7 @@ void MainComponent::paint(juce::Graphics& g)
 
                     juce::Colour noteColor = (static_cast<int>(idx) == currentChordIndex_ && isPlaying_) ? accent_ : accentDim_;
 
-                    int noteCenterX = x + boxWidth / 2;
+                    int noteCenterX = x + thisBoxWidth / 2;
                     for (size_t noteIdx = 0; noteIdx < midiNotes.size(); ++noteIdx) {
                         int midi = midiNotes[noteIdx];
                         int noteY = midiToStaffY(midi, trebleY, bassY, staffLineSpacing);
@@ -719,6 +807,17 @@ void MainComponent::paint(juce::Graphics& g)
                             } else {
                                 g.setColour(noteColor);
                             }
+
+                            // Draw accidental if needed (black keys: 1,3,6,8,10)
+                            int pitchClass = midi % 12;
+                            bool isSharp = (pitchClass == 1 || pitchClass == 3 || pitchClass == 6 ||
+                                           pitchClass == 8 || pitchClass == 10);
+                            if (isSharp) {
+                                // Draw sharp symbol (simplified #)
+                                g.setFont(juce::FontOptions(12.0f));
+                                g.drawText("#", noteCenterX - 14, noteY - 6, 10, 12, juce::Justification::centred);
+                            }
+
                             // Note head: 9x8 ratio (slightly horizontal, more like standard notation)
                             g.drawEllipse(static_cast<float>(noteCenterX - 5), static_cast<float>(noteY - 4), 9.0f, 8.0f, 1.5f);
 
@@ -730,6 +829,9 @@ void MainComponent::paint(juce::Graphics& g)
                         }
                     }
                 }
+
+                // Advance X position for next chord
+                currentX += thisBoxWidth + spacing;
             }
         }
     }
@@ -878,6 +980,7 @@ void MainComponent::paintOverChildren(juce::Graphics& g)
             case 4: bounds = showChordsToggle_.getBounds().toFloat(); break;
             case 5: bounds = showTrebleToggle_.getBounds().toFloat(); break;
             case 6: bounds = showBassToggle_.getBounds().toFloat(); break;
+            case 7: bounds = importMidiButton_.getBounds().toFloat(); break;
             default: break;
         }
 
@@ -941,15 +1044,17 @@ void MainComponent::resized()
 
     area.removeFromTop(15);  // 8 -> 15 增加列間距
 
-    // Top controls row 2 (buttons) - 統一間距
+    // Top controls row 2 (buttons) - 更緊湊的間距
     auto row2 = area.removeFromTop(30);
-    generateButton_.setBounds(row2.removeFromLeft(95));  // 90 -> 95
-    row2.removeFromLeft(10);  // 8 -> 10
-    playButton_.setBounds(row2.removeFromLeft(75));  // 70 -> 75
-    row2.removeFromLeft(10);
-    stopButton_.setBounds(row2.removeFromLeft(75));  // 70 -> 75
-    row2.removeFromLeft(10);
-    exportButton_.setBounds(row2.removeFromLeft(105));  // 100 -> 105
+    generateButton_.setBounds(row2.removeFromLeft(80));
+    row2.removeFromLeft(6);
+    playButton_.setBounds(row2.removeFromLeft(50));
+    row2.removeFromLeft(6);
+    stopButton_.setBounds(row2.removeFromLeft(50));
+    row2.removeFromLeft(6);
+    exportButton_.setBounds(row2.removeFromLeft(85));
+    row2.removeFromLeft(6);
+    importMidiButton_.setBounds(row2.removeFromLeft(85));
 
     // Display toggles (next to "CHORD PROGRESSION" label)
     int toggleY = 178;
@@ -990,7 +1095,25 @@ void MainComponent::mouseDown(const juce::MouseEvent& event)
     int x = event.x;
     int y = event.y;
 
-    // First check if clicking on a note (for dragging) - priority over chord box
+    // First check if clicking on chord right edge for duration resize
+    for (size_t i = 0; i < chordBoxCache_.size(); ++i) {
+        const auto& box = chordBoxCache_[i];
+        int rightEdge = box.x + box.width;
+
+        // Check if mouse is near the right edge (8px range) and within box height
+        if (x >= rightEdge - 8 && x <= rightEdge + 4 &&
+            y >= box.y && y <= box.y + box.height) {
+            resizingChordIndex_ = static_cast<int>(i);
+            resizeStartX_ = x;
+            resizeStartDuration_ = currentProgression_[i].getDuration();
+            glowButtonIndex_ = 100 + static_cast<int>(i);
+            glowCounter_ = 6;
+            statusLabel_.setText("Resizing duration...", juce::dontSendNotification);
+            return;
+        }
+    }
+
+    // Then check if clicking on a note (for dragging) - priority over chord box
     for (size_t i = 0; i < chordBoxCache_.size(); ++i) {
         int noteIdx = findNoteAtPosition(static_cast<int>(i), x, y);
         if (noteIdx >= 0) {
@@ -1053,6 +1176,28 @@ void MainComponent::mouseDown(const juce::MouseEvent& event)
 
 void MainComponent::mouseDrag(const juce::MouseEvent& event)
 {
+    // Handle chord duration resizing
+    if (resizingChordIndex_ >= 0 && static_cast<size_t>(resizingChordIndex_) < currentProgression_.size()) {
+        int deltaX = event.x - resizeStartX_;
+        // Convert pixel delta to duration delta (40 pixels = 1 beat)
+        double deltaDuration = deltaX / 40.0;
+        double newDuration = resizeStartDuration_ + deltaDuration;
+        // Clamp to valid range (0.5 to 8 beats)
+        newDuration = std::max(0.5, std::min(8.0, newDuration));
+        // Snap to 0.5 beat increments
+        newDuration = std::round(newDuration * 2.0) / 2.0;
+
+        currentProgression_[static_cast<size_t>(resizingChordIndex_)].setDuration(newDuration);
+
+        // Update status
+        juce::String durationStr = juce::String(newDuration, 1);
+        if (durationStr.endsWith(".0")) durationStr = juce::String(static_cast<int>(newDuration));
+        statusLabel_.setText("Duration: " + durationStr + " beats", juce::dontSendNotification);
+        repaint();
+        return;
+    }
+
+    // Handle note dragging
     if (draggingChordIndex_ < 0 || draggingNoteIndex_ < 0) return;
     if (static_cast<size_t>(draggingChordIndex_) >= chordBoxCache_.size()) return;
 
@@ -1076,15 +1221,52 @@ void MainComponent::mouseDrag(const juce::MouseEvent& event)
 
 void MainComponent::mouseUp(const juce::MouseEvent& /*event*/)
 {
+    // Handle chord duration resize completion
+    if (resizingChordIndex_ >= 0) {
+        statusLabel_.setText("Duration updated", juce::dontSendNotification);
+        resizingChordIndex_ = -1;
+        repaint();
+        return;
+    }
+
     if (draggingChordIndex_ >= 0 && draggingNoteIndex_ >= 0 && !draggedNotes_.empty()) {
         // Save the custom voicing
         customVoicings_[static_cast<size_t>(draggingChordIndex_)] = draggedNotes_;
-        statusLabel_.setText("Note position saved", juce::dontSendNotification);
+
+        // Recognize and update chord symbol based on new notes
+        auto newChord = JazzArchitect::MIDIImporter::recognizeChordFromNotes(draggedNotes_);
+        // Preserve duration from original chord
+        double originalDuration = currentProgression_[static_cast<size_t>(draggingChordIndex_)].getDuration();
+        newChord.setDuration(originalDuration);
+        currentProgression_[static_cast<size_t>(draggingChordIndex_)] = newChord;
+
+        statusLabel_.setText("Chord updated: " + juce::String(newChord.toString()), juce::dontSendNotification);
     }
     draggingChordIndex_ = -1;
     draggingNoteIndex_ = -1;
     draggedNotes_.clear();
     repaint();
+}
+
+void MainComponent::mouseMove(const juce::MouseEvent& event)
+{
+    // Check if mouse is near any chord box right edge for resize cursor
+    int x = event.x;
+    int y = event.y;
+
+    for (size_t i = 0; i < chordBoxCache_.size(); ++i) {
+        const auto& box = chordBoxCache_[i];
+        int rightEdge = box.x + box.width;
+
+        // Check if mouse is near the right edge (8px range) and within box height
+        if (x >= rightEdge - 8 && x <= rightEdge + 4 &&
+            y >= box.y && y <= box.y + box.height) {
+            setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
+            return;
+        }
+    }
+
+    setMouseCursor(juce::MouseCursor::NormalCursor);
 }
 
 int MainComponent::findChordAtPosition(int x, int y)

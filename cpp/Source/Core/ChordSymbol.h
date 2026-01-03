@@ -6,6 +6,7 @@
 #include <vector>
 #include <map>
 #include <optional>
+#include <algorithm>
 
 namespace JazzArchitect {
 
@@ -30,6 +31,7 @@ public:
     const std::vector<int>& extensions() const { return extensions_; }
     const std::map<int, int>& alterations() const { return alterations_; }
     std::optional<PitchClass> bass() const { return bass_; }
+    double getDuration() const { return duration_; }
 
     // Setters
     void setRoot(PitchClass root) { root_ = root; }
@@ -37,6 +39,7 @@ public:
     void addExtension(int ext) { extensions_.push_back(ext); }
     void setAlteration(int degree, int alteration) { alterations_[degree] = alteration; }
     void setBass(PitchClass bass) { bass_ = bass; }
+    void setDuration(double beats) { duration_ = std::max(0.5, std::min(8.0, beats)); }
 
     // Guide tones (3rd and 7th)
     PitchClass third() const;
@@ -71,6 +74,7 @@ private:
     std::vector<int> extensions_;           // 9, 11, 13
     std::map<int, int> alterations_;        // degree -> alteration (-1=b, +1=#)
     std::optional<PitchClass> bass_;        // Slash chord bass
+    double duration_ = 2.0;                 // Duration in beats (default 2 beats)
 };
 
 // 便捷工廠函數
