@@ -60,6 +60,7 @@ private:
     juce::TextButton stopButton_{"Stop"};
     juce::TextButton exportButton_{"Export MIDI"};
     juce::TextButton importMidiButton_{"Import MIDI"};
+    juce::TextButton importImageButton_{"Import Image"};
 
     juce::Label bpmLabel_{"", "BPM"};
     juce::Label lengthLabel_{"", "Length"};
@@ -158,6 +159,7 @@ private:
     void initializeAudio();
     void exportMIDI();
     void importMIDI();
+    void importImage();
     void updateAudioOutputDevices();
     void changeAudioOutputDevice();
     int midiToStaffY(int midiNote, int trebleY, int bassY, int spacing);

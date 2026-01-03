@@ -22,3 +22,4 @@ cpp/JUCE/
 
 # Data submodules
 data/
+omr_venv/

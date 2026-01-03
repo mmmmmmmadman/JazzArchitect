@@ -1,6 +1,8 @@
 #include "MainComponent.h"
 #include "MIDI/MIDIExporter.h"
 #include "MIDI/MIDIImporter.h"
+#include <thread>
+#include <vector>
 
 MainComponent::MainComponent()
 {
@@ -108,11 +110,14 @@ MainComponent::MainComponent()
     styleButton(exportButton_, textDim_);
     importMidiButton_.onClick = [this] { glowButtonIndex_ = 7; glowCounter_ = 6; importMIDI(); };
     styleButton(importMidiButton_, textDim_);
+    importImageButton_.onClick = [this] { glowButtonIndex_ = 8; glowCounter_ = 6; importImage(); };
+    styleButton(importImageButton_, textDim_);
     addAndMakeVisible(generateButton_);
     addAndMakeVisible(playButton_);
     addAndMakeVisible(stopButton_);
     addAndMakeVisible(exportButton_);
     addAndMakeVisible(importMidiButton_);
+    addAndMakeVisible(importImageButton_);
 
     // Style parameter sliders (vertical)
     auto setupVerticalSlider = [this](juce::Slider& slider, juce::Label& label, float defaultVal) {
@@ -390,6 +395,157 @@ void MainComponent::importMIDI()
             statusLabel_.setText("Import failed: " + juce::String(result.errorMessage),
                                 juce::dontSendNotification);
         }
+    });
+
+    // Keep chooser alive
+    fileChooser_ = std::move(chooser);
+}
+
+void MainComponent::importImage()
+{
+    // Create file chooser for image files
+    auto chooser = std::make_unique<juce::FileChooser>(
+        "Import Sheet Music Image",
+        juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
+        "*.png;*.jpg;*.jpeg;*.bmp;*.tiff");
+
+    auto chooserFlags = juce::FileBrowserComponent::openMode |
+                        juce::FileBrowserComponent::canSelectFiles;
+
+    chooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc) {
+        auto imageFile = fc.getResult();
+        if (imageFile == juce::File{}) {
+            return;  // User cancelled
+        }
+
+        statusLabel_.setText("Processing image with OMR... (this may take a few minutes)",
+                            juce::dontSendNotification);
+        repaint();
+
+        // Run processing in background thread
+        std::thread([this, imageFile]() {
+            // Try multiple locations for the script and venv
+            std::vector<juce::File> searchPaths = {
+                // Development: project root
+                juce::File("/Users/madzine/Documents/JazzArchitect"),
+                // App bundle parent (Release)
+                juce::File::getSpecialLocation(juce::File::currentApplicationFile)
+                    .getParentDirectory().getParentDirectory().getParentDirectory()
+                    .getParentDirectory().getParentDirectory(),
+                // Current working directory
+                juce::File::getCurrentWorkingDirectory()
+            };
+
+            juce::File scriptPath, venvPython;
+            for (const auto& basePath : searchPaths) {
+                auto testScript = basePath.getChildFile("scripts/image_to_midi.py");
+                auto testVenv = basePath.getChildFile("omr_venv/bin/python3");
+                if (testScript.existsAsFile()) {
+                    scriptPath = testScript;
+                    if (testVenv.existsAsFile()) {
+                        venvPython = testVenv;
+                    }
+                    break;
+                }
+            }
+
+            if (!scriptPath.existsAsFile()) {
+                juce::MessageManager::callAsync([this]() {
+                    statusLabel_.setText("OMR script not found. Please install from project directory.",
+                                        juce::dontSendNotification);
+                });
+                return;
+            }
+
+            // Output MIDI file in temp directory
+            auto tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
+            auto outputMidi = tempDir.getChildFile(imageFile.getFileNameWithoutExtension() + ".mid");
+
+            // Build command using StringArray for proper argument handling
+            juce::StringArray args;
+            if (venvPython.existsAsFile()) {
+                args.add(venvPython.getFullPathName());
+            } else {
+                args.add("/usr/bin/python3");
+            }
+            args.add(scriptPath.getFullPathName());
+            args.add(imageFile.getFullPathName());
+            args.add(outputMidi.getFullPathName());
+
+            // Execute command
+            juce::ChildProcess process;
+            bool started = process.start(args);
+
+            if (!started) {
+                juce::MessageManager::callAsync([this]() {
+                    statusLabel_.setText("Failed to start OMR process. Check Python/oemer installation.",
+                                        juce::dontSendNotification);
+                });
+                return;
+            }
+
+            // Wait for completion (with timeout)
+            bool finished = process.waitForProcessToFinish(600000);  // 10 minutes
+
+            if (!finished) {
+                process.kill();
+                juce::MessageManager::callAsync([this]() {
+                    statusLabel_.setText("OMR process timed out.",
+                                        juce::dontSendNotification);
+                });
+                return;
+            }
+
+            // Check output file
+            auto exitCode = process.getExitCode();
+            juce::String processOutput = process.readAllProcessOutput();
+
+            if (exitCode != 0 || !outputMidi.existsAsFile()) {
+                juce::MessageManager::callAsync([this, exitCode, processOutput, outputMidi]() {
+                    juce::String msg = "Exit code: " + juce::String(exitCode) + "\n\n";
+                    if (processOutput.isNotEmpty()) {
+                        msg += "Output:\n" + processOutput;
+                    } else {
+                        msg += "No output from process";
+                    }
+                    msg += "\n\nMIDI file exists: " + juce::String(outputMidi.existsAsFile() ? "Yes" : "No");
+
+                    juce::AlertWindow::showMessageBoxAsync(
+                        juce::AlertWindow::WarningIcon,
+                        "OMR Failed",
+                        msg,
+                        "OK");
+
+                    statusLabel_.setText("OMR failed - see error dialog", juce::dontSendNotification);
+                });
+                return;
+            }
+
+            // Import the generated MIDI file
+            auto result = JazzArchitect::MIDIImporter::importFromFile(outputMidi);
+
+            juce::MessageManager::callAsync([this, result, imageFile]() {
+                if (result.success) {
+                    currentProgression_ = result.chords;
+                    customVoicings_.clear();
+                    currentChordIndex_ = 0;
+                    playbackPosition_ = 0.0;
+
+                    if (result.bpm > 30.0 && result.bpm < 250.0) {
+                        bpmSlider_.setValue(result.bpm, juce::dontSendNotification);
+                    }
+
+                    statusLabel_.setText("Imported " + juce::String(static_cast<int>(result.chords.size())) +
+                                        " chords from image: " + imageFile.getFileName(),
+                                        juce::dontSendNotification);
+                    repaint();
+                } else {
+                    statusLabel_.setText("Failed to parse OMR output: " + juce::String(result.errorMessage),
+                                        juce::dontSendNotification);
+                }
+            });
+
+        }).detach();
     });
 
     // Keep chooser alive
@@ -1052,9 +1208,11 @@ void MainComponent::resized()
     row2.removeFromLeft(6);
     stopButton_.setBounds(row2.removeFromLeft(50));
     row2.removeFromLeft(6);
-    exportButton_.setBounds(row2.removeFromLeft(85));
-    row2.removeFromLeft(6);
-    importMidiButton_.setBounds(row2.removeFromLeft(85));
+    exportButton_.setBounds(row2.removeFromLeft(75));
+    row2.removeFromLeft(5);
+    importMidiButton_.setBounds(row2.removeFromLeft(75));
+    row2.removeFromLeft(5);
+    importImageButton_.setBounds(row2.removeFromLeft(80));
 
     // Display toggles (next to "CHORD PROGRESSION" label)
     int toggleY = 178;
